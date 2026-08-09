@@ -1,0 +1,42 @@
+# ChatDB Third-Party Credits
+
+ChatDB is built on top of the following excellent open-source projects.
+We sincerely thank all the contributors.
+
+## Core Dependencies
+
+| Project | License | Usage |
+|---------|---------|-------|
+| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON serialization/deserialization |
+| [fmt](https://github.com/fmtlib/fmt) | MIT | String formatting |
+| [spdlog](https://github.com/gabime/spdlog) | MIT | Logging framework |
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) | MIT | HTTP server (REST API + SSE) |
+| [ixwebsocket](https://github.com/machinezone/ixwebsocket) | BSD-3-Clause | WebSocket client (OneBot v11) |
+| [SQLite](https://www.sqlite.org/) | Public Domain | Local message & memory storage |
+| [hiredis](https://github.com/redis/hiredis) | BSD-3-Clause | Redis client (vector index) |
+| [OpenSSL](https://www.openssl.org/) | Apache-2.0 | SHA1 hashing & TLS |
+
+## Build Tools
+
+| Project | License | Usage |
+|---------|---------|-------|
+| [CMake](https://cmake.org/) | BSD-3-Clause | Build system |
+| [GitHub Actions](https://github.com/features/actions) | Proprietary (free for OSS) | CI/CD automation |
+
+## License Notes
+
+- All MIT-licensed components retain their original copyright notices.
+- SQLite is in the public domain; no attribution is legally required, but we acknowledge the SQLite team.
+- OpenSSL is dual-licensed under Apache-2.0 and the OpenSSL License; we use the Apache-2.0 variant.
+- ixwebsocket is BSD-3-Clause licensed.
+- hiredis is BSD-3-Clause licensed.
+
+## Trademarks
+
+- "OneBot" is a protocol specification; this project is an independent implementation.
+- "go-cqhttp", "AstrBot", "NoneBot2" are trademarks of their respective owners.
+- "Redis" is a trademark of Redis Ltd.
+
+---
+
+For the full text of each license, please refer to the upstream repositories linked above.

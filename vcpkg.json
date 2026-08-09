@@ -1,0 +1,12 @@
+{
+  "name": "chatdb",
+  "version": "2.1.0",
+  "description": "ChatDB - Message memory and semantic search engine for QQ/OneBot",
+  "homepage": "https://github.com/su2569/chatdb",
+  "license": "MIT",
+  "dependencies": [
+    "sqlite3",
+    "hiredis",
+    "openssl"
+  ]
+}
