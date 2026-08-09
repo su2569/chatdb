@@ -2,10 +2,10 @@ name: Build
 
 on:
   push:
-分支: [main, master]
-标签: ['v*']
+    branches: [main, master]
+    tags: ['v*']
   pull_request:
-分支: [main, master]
+    branches: [main, master]
 
 jobs:
   build-linux:
@@ -84,4 +84,41 @@ jobs:
       - name: Install vcpkg dependencies
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: 'a1a1cbc975abf909a6c8985a6a2b8fe20bbd9bd6
+          vcpkgGitCommitId: 'a1a1cbc975abf909a6c8985a6a2b8fe20bbd9bd6'
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatdb-windows-${{ matrix.build_type }}
+          path: build/${{ matrix.build_type }}/chatdb.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/chatdb-linux-Release/chatdb
+            artifacts/chatdb-macos-Release/chatdb
+            artifacts/chatdb-windows-Release/chatdb.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
