@@ -73,35 +73,40 @@ jobs:
           path: build/chatdb
 
   build-windows:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        build_type: [Release]
+    runs-on: windows-2022
+    env:
+      ACTIONS_RUNTIME_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ACTIONS_CACHE_URL: ""
+      VCPKG_BINARY_SOURCES: "clear"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install vcpkg dependencies
+      - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: 'a1a1cbc975abf909a6c8985a6a2b8fe20bbd9bd6'
+          vcpkgGitCommitId: 'a1212c93cabf5f8b298f5e5f9c0f15e4e1e5e5e5'
+
+      - name: Install vcpkg packages
+        run: |
+          vcpkg install sqlite3 hiredis --triplet x64-windows
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
-        shell: pwsh
         run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
       - name: Build
-        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+        run: cmake --build build --parallel
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chatdb-windows-${{ matrix.build_type }}
-          path: build/${{ matrix.build_type }}/chatdb.exe
-
+          name: chatdb-windows
+          path: build/chatdb.exe
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-linux, build-macos, build-windows]
