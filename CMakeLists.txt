@@ -73,7 +73,7 @@ FetchContent_Declare(spdlog
     GIT_TAG v1.13.0
     GIT_SHALLOW TRUE
 )
-FetchContent_Declare(cpp_httplib
+FetchContent_Declare(httplib
     GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
     GIT_TAG v0.15.3
     GIT_SHALLOW TRUE
@@ -84,7 +84,7 @@ FetchContent_Declare(ixwebsocket
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(nlohmann_json fmt spdlog cpp_httplib ixwebsocket)
+FetchContent_MakeAvailable(nlohmann_json fmt spdlog httplib ixwebsocket)
 
 set(CHATDB_SOURCES
     src/config.cpp
@@ -118,8 +118,9 @@ target_link_libraries(chatdb PRIVATE
     OpenSSL::Crypto
 )
 
-if(TARGET cpp-httplib)
-    target_link_libraries(chatdb PRIVATE cpp-httplib)
+if(TARGET httplib)
+    target_link_libraries(chatdb PRIVATE httplib)
+    target_include_directories(chatdb PRIVATE ${httplib_SOURCE_DIR})
 endif()
 
 if(TARGET ixwebsocket)
