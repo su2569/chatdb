@@ -1,4 +1,5 @@
 #include "chatdb/config.hpp"
+#include <spdlog/spdlog.h>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
