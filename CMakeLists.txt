@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16...3.30)
 project(ChatDB VERSION 2.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
