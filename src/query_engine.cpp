@@ -1,7 +1,7 @@
 #include "chatdb/query_engine.hpp"
 #include "chatdb/sqlite_storage.hpp"
 #include "chatdb/redis_client.hpp"
-#include "chatdb/ollama_client.hpp"
+#include "chatdb/embedding_provider.hpp"
 #include <optional>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -10,8 +10,8 @@
 
 namespace chatdb {
 
-QueryEngine::QueryEngine(SQLiteStorage* sqlite, RedisClient* redis, OllamaClient* ollama)
-    : sqlite_(sqlite), redis_(redis), ollama_(ollama) {}
+QueryEngine::QueryEngine(SQLiteStorage* sqlite, RedisClient* redis, EmbeddingProviderManager* provider_mgr)
+    : sqlite_(sqlite), redis_(redis), provider_mgr_(provider_mgr), ollama_(nullptr) {}
 
 std::vector<SearchResult> QueryEngine::search(const SearchRequest& req) {
     switch (req.mode) {
@@ -58,13 +58,14 @@ std::vector<SearchResult> QueryEngine::search_semantic(const std::string& senten
                                                         int limit,
                                                         float min_sim) {
     std::vector<SearchResult> results;
-    if (!ollama_ || !redis_ || !redis_->is_connected() || !redis_->index_exists()) {
-        spdlog::warn("Semantic search unavailable: Ollama/Redis not ready or no index");
+    auto provider = provider_mgr_ ? provider_mgr_->current() : nullptr;
+    if (!provider || !redis_ || !redis_->is_connected() || !redis_->index_exists()) {
+        spdlog::warn("Semantic search unavailable: Provider/Redis not ready or no index");
         return results;
     }
 
     try {
-        auto query_vec = ollama_->embed(sentence);
+        auto query_vec = provider->embed(sentence);
         if (query_vec.empty()) {
             spdlog::warn("Empty embedding returned from Ollama");
             return results;

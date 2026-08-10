@@ -438,8 +438,14 @@ std::vector<protocol::MemoryEntry> MemorySummarizer::search_memories(int64_t gro
     if (search_type == "time") {
         auto comma = query.find(',');
         if (comma != std::string::npos) {
-            int64_t start = std::stoll(query.substr(0, comma));
-            int64_t end = std::stoll(query.substr(comma + 1));
+            int64_t start = 0, end = 0;
+            try {
+                start = std::stoll(query.substr(0, comma));
+                end = std::stoll(query.substr(comma + 1));
+            } catch (...) {
+                spdlog::warn("Invalid time range format: {}", query);
+                return results;
+            }
             const char* sql = "SELECT id, group_id, summary, detail, category, level, "
                               "start_time, end_time, created_at, importance_score, "
                               "is_manual, source_provider, tags FROM memories "
@@ -486,7 +492,13 @@ std::vector<protocol::MemoryEntry> MemorySummarizer::search_memories(int64_t gro
         sqlite3_stmt* stmt = nullptr;
         sqlite3_prepare_v2(sqlite_->raw_db(), sql, -1, &stmt, nullptr);
         if (stmt) {
-            sqlite3_bind_int64(stmt, 1, std::stoll(query));
+            try {
+                sqlite3_bind_int64(stmt, 1, std::stoll(query));
+            } catch (...) {
+                spdlog::warn("Invalid msg_id for context: {}", query);
+                sqlite3_finalize(stmt);
+                return results;
+            }
             sqlite3_bind_int64(stmt, 2, group_id);
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 protocol::MemoryEntry m;

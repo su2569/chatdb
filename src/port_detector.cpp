@@ -102,11 +102,11 @@ std::vector<PortInfo> PortDetector::scan_processes() {
                 size_t space_pos = line.find(' ', port_pos);
                 if (space_pos != std::string::npos) {
                     std::string port_str = line.substr(port_pos + 1, space_pos - port_pos - 1);
-                    int port = std::stoi(port_str);
+                    int port = 0; try { port = std::stoi(port_str); } catch (...) { continue; }
 
                     size_t pid_pos = line.rfind(' ');
                     if (pid_pos != std::string::npos) {
-                        int pid = std::stoi(line.substr(pid_pos + 1));
+                        int pid = 0; try { pid = std::stoi(line.substr(pid_pos + 1)); } catch (...) { continue; }
                         results.push_back({"unknown", port, "unknown", pid});
                     }
                 }
@@ -141,7 +141,7 @@ std::vector<PortInfo> PortDetector::scan_processes() {
                 size_t space_pos = line.find(' ', colon_pos);
                 if (space_pos != std::string::npos) {
                     std::string port_str = line.substr(colon_pos + 1, space_pos - colon_pos - 1);
-                    int port = std::stoi(port_str);
+                    int port = 0; try { port = std::stoi(port_str); } catch (...) { continue; }
 
                     std::string proc_name = "unknown";
                     size_t proc_pos = line.find("\"");

@@ -61,21 +61,21 @@ bool ConfigManager::load_from_file(const std::string& path) {
 
         if (key == "sqlite_path") cfg_.sqlite_path = val;
         else if (key == "redis_host") cfg_.redis_host = val;
-        else if (key == "redis_port") cfg_.redis_port = std::stoi(val);
+        else if (key == "redis_port") { try { cfg_.redis_port = std::stoi(val); } catch (...) { spdlog::warn("Invalid config redis_port: {}", val); } }
         else if (key == "redis_password") cfg_.redis_password = val;
         else if (key == "ollama_host") cfg_.ollama_host = val;
-        else if (key == "ollama_port") cfg_.ollama_port = std::stoi(val);
+        else if (key == "ollama_port") { try { cfg_.ollama_port = std::stoi(val); } catch (...) { spdlog::warn("Invalid config ollama_port: {}", val); } }
         else if (key == "ollama_model") cfg_.ollama_model = val;
-        else if (key == "ollama_timeout_ms") cfg_.ollama_timeout_ms = std::stoi(val);
+        else if (key == "ollama_timeout_ms") { try { cfg_.ollama_timeout_ms = std::stoi(val); } catch (...) { spdlog::warn("Invalid config ollama_timeout_ms: {}", val); } }
         else if (key == "openai_api_key") cfg_.openai_api_key = val;
         else if (key == "openai_model") cfg_.openai_model = val;
         else if (key == "aliyun_api_key") cfg_.aliyun_api_key = val;
         else if (key == "aliyun_model") cfg_.aliyun_model = val;
-        else if (key == "vector_retention_days") cfg_.vector_retention_days = std::stoi(val);
-        else if (key == "worker_threads") cfg_.worker_threads = std::stoi(val);
-        else if (key == "tcp_port") cfg_.tcp_port = std::stoi(val);
+        else if (key == "vector_retention_days") { try { cfg_.vector_retention_days = std::stoi(val); } catch (...) { spdlog::warn("Invalid config vector_retention_days: {}", val); } }
+        else if (key == "worker_threads") { try { cfg_.worker_threads = std::stoi(val); } catch (...) { spdlog::warn("Invalid config worker_threads: {}", val); } }
+        else if (key == "tcp_port") { try { cfg_.tcp_port = std::stoi(val); } catch (...) { spdlog::warn("Invalid config tcp_port: {}", val); } }
         else if (key == "ws_host") cfg_.ws_host = val;
-        else if (key == "ws_port") cfg_.ws_port = std::stoi(val);
+        else if (key == "ws_port") { try { cfg_.ws_port = std::stoi(val); } catch (...) { spdlog::warn("Invalid config ws_port: {}", val); } }
         else if (key == "ws_access_token") cfg_.ws_access_token = val;
     }
     return true;

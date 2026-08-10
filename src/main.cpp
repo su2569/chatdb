@@ -59,6 +59,13 @@ Environment Variables:
 }
 
 int main(int argc, char* argv[]) {
+    auto safe_stoll = [](const std::string& s) -> std::optional<int64_t> {
+        try { return std::stoll(s); } catch (...) { return std::nullopt; }
+    };
+    auto safe_stoi = [](const std::string& s) -> std::optional<int> {
+        try { return std::stoi(s); } catch (...) { return std::nullopt; }
+    };
+
     std::string config_file = "chatdb.conf";
     bool show_stats = false;
     bool test_only = false;
@@ -78,9 +85,15 @@ int main(int argc, char* argv[]) {
         else if (arg == "-t" || arg == "--test") test_only = true;
         else if (arg == "-d" || arg == "--demo") demo_mode = true;
         else if (arg == "-v" || arg == "--vacuum") do_vacuum = true;
-        else if (arg == "--cleanup" && i + 1 < argc) cleanup_days = std::stoi(argv[++i]);
+        else if (arg == "--cleanup" && i + 1 < argc) {
+            try { cleanup_days = std::stoi(argv[++i]); }
+            catch (...) { spdlog::error("Invalid cleanup days"); return 1; }
+        }
         else if (arg == "--switch-provider" && i + 1 < argc) switch_provider_name = argv[++i];
-        else if (arg == "--summarize" && i + 2 < argc) { summarize_group = argv[++i]; summarize_level = argv[++i]; }
+        else if (arg == "--summarize" && i + 2 < argc) {
+            summarize_group = argv[++i];
+            summarize_level = argv[++i];
+        }
         else if (arg == "--backup") do_backup = true;
         else if (arg == "--restore") do_restore = true;
         else if (arg == "-h" || arg == "--help") { print_usage(argv[0]); return 0; }
@@ -137,7 +150,15 @@ int main(int argc, char* argv[]) {
     if (do_vacuum) { db.vacuum(); std::cout << "VACUUM done.\n"; return 0; }
     if (cleanup_days >= 0) { int n = db.cleanup_old_data(cleanup_days); std::cout << "Cleaned " << n << " items.\n"; return 0; }
     if (!switch_provider_name.empty()) { db.switch_provider(switch_provider_name); std::cout << "Switched.\n"; return 0; }
-    if (!summarize_group.empty()) { db.summarize_now(std::stoll(summarize_group), summarize_level); std::cout << "Summarized.\n"; return 0; }
+    if (!summarize_group.empty()) {
+            try {
+                db.summarize_now(std::stoll(summarize_group), summarize_level);
+                std::cout << "Summarized.\n";
+            } catch (...) {
+                std::cout << "Invalid group ID.\n"; return 1;
+            }
+            return 0;
+        }
     if (do_backup) { db.backup_index(); std::cout << "Backup done.\n"; return 0; }
     if (do_restore) { db.restore_index(); std::cout << "Restore done.\n"; return 0; }
 
@@ -222,12 +243,22 @@ int main(int argc, char* argv[]) {
                               << ": " << r.content << "\n";
             }
             else if (cmd == "recent" && parts.size() > 1) {
-                for (auto& r : db.get_recent(std::stoll(parts[1]), 10))
-                    std::cout << "  " << r.nickname << ": " << r.content << "\n";
+                if (auto gid = safe_stoll(parts[1])) {
+                    for (auto& r : db.get_recent(*gid, 10))
+                        std::cout << "  " << r.nickname << ": " << r.content << "\n";
+                } else {
+                    std::cout << "Invalid group ID.\n";
+                }
             }
             else if (cmd == "context" && parts.size() > 1) {
-                int64_t msg_id = std::stoll(parts[1]);
-                int radius = (parts.size() > 2) ? std::stoi(parts[2]) : 5;
+                auto msg_id_opt = safe_stoll(parts[1]);
+                if (!msg_id_opt) { std::cout << "Invalid msg ID.\n"; continue; }
+                int64_t msg_id = *msg_id_opt;
+                int radius = 5;
+                if (parts.size() > 2) {
+                    auto r_opt = safe_stoi(parts[2]);
+                    if (r_opt) radius = *r_opt;
+                }
                 auto results = db.query()->get_context(msg_id, radius);
                 std::cout << "Context for msg " << msg_id << " (radius=" << radius << "):\n";
                 for (const auto& r : results) {
@@ -245,12 +276,20 @@ int main(int argc, char* argv[]) {
                 std::cout << "Switched to " << parts[1] << "\n";
             }
             else if (cmd == "memories" && parts.size() > 1) {
-                for (auto& m : db.get_memories(std::stoll(parts[1]), "", 10))
-                    std::cout << "  [" << m.level << "] " << m.summary << "\n";
+                if (auto gid = safe_stoll(parts[1])) {
+                    for (auto& m : db.get_memories(*gid, "", 10))
+                        std::cout << "  [" << m.level << "] " << m.summary << "\n";
+                } else {
+                    std::cout << "Invalid group ID.\n";
+                }
             }
             else if (cmd == "summarize" && parts.size() > 2) {
-                db.summarize_now(std::stoll(parts[1]), parts[2]);
-                std::cout << "Summary queued.\n";
+                if (auto gid = safe_stoll(parts[1])) {
+                    db.summarize_now(*gid, parts[2]);
+                    std::cout << "Summary queued.\n";
+                } else {
+                    std::cout << "Invalid group ID.\n";
+                }
             }
             else if (cmd == "active") {
                 std::cout << "Active chat test (see logs)\n";

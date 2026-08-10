@@ -99,7 +99,7 @@ bool ChatDatabase::initialize(const DatabaseConfig& cfg) {
     // 5. Processor & Query
     processor_ = std::make_unique<MessageProcessor>(sqlite_.get(), redis_.get(), ollama_.get());
     processor_->start();
-    query_ = std::make_unique<QueryEngine>(sqlite_.get(), redis_.get(), ollama_.get());
+    query_ = std::make_unique<QueryEngine>(sqlite_.get(), redis_.get(), provider_mgr_.get());
 
     // 6. Memory Summarizer
     summarizer_ = std::make_unique<MemorySummarizer>(sqlite_.get(), redis_.get(), provider_mgr_.get());

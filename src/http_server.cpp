@@ -5,7 +5,7 @@
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <httplib.h>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <chrono>
@@ -32,31 +32,15 @@ static std::string sha1_hex(const std::string& input) {
     return hex;
 }
 
-// ========== SSE 客户端 ==========
+// ========== 安全解析辅助 ==========
+static std::optional<int64_t> safe_stoll(const std::string& s) {
+    try { return std::stoll(s); } catch (...) { return std::nullopt; }
+}
+static std::optional<int> safe_stoi(const std::string& s) {
+    try { return std::stoi(s); } catch (...) { return std::nullopt; }
+}
 
-    std::chrono::steady_clock::time_point last_active;
-
-    SseClient() : last_active(std::chrono::steady_clock::now()) {}
-
-    void push(const std::string& event) {
-        std::lock_guard<std::mutex> lock(mtx);
-        events.push(event);
-        last_active = std::chrono::steady_clock::now();
-        cv.notify_one();
-    }
-
-    bool pop(std::string& out, std::chrono::milliseconds timeout) {
-        std::unique_lock<std::mutex> lock(mtx);
-        if (!cv.wait_for(lock, timeout, [this] { return !events.empty() || !active.load(); })) {
-            return false;
-        }
-        if (!active.load() && events.empty()) return false;
-        out = events.front();
-        events.pop();
-        last_active = std::chrono::steady_clock::now();
-        return true;
-    }
-};
+// ========== SSE 客户端（定义在 http_server.hpp 中）==========
 
 HttpServer::HttpServer(const Config& cfg, ChatDatabase* db) : cfg_(cfg), db_(db) {}
 
@@ -280,8 +264,11 @@ void HttpServer::handle_post_messages_recall(const httplib::Request& req, httpli
 void HttpServer::handle_get_search(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto group_id = std::stoll(req.get_param_value("group_id", "0"));
-    auto limit = std::stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
+    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto group_id = *gid_opt;
+    auto limit = *limit_opt;
     auto results = db_->search_fulltext(query, group_id, limit);
     set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "fulltext"}});
 }
@@ -289,8 +276,11 @@ void HttpServer::handle_get_search(const httplib::Request& req, httplib::Respons
 void HttpServer::handle_get_search_semantic(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto group_id = std::stoll(req.get_param_value("group_id", "0"));
-    auto limit = std::stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
+    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto group_id = *gid_opt;
+    auto limit = *limit_opt;
     auto results = db_->search_semantic(query, group_id, limit);
     set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "semantic"}});
 }
@@ -298,24 +288,33 @@ void HttpServer::handle_get_search_semantic(const httplib::Request& req, httplib
 void HttpServer::handle_get_search_hybrid(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto group_id = std::stoll(req.get_param_value("group_id", "0"));
-    auto limit = std::stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
+    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto group_id = *gid_opt;
+    auto limit = *limit_opt;
     auto results = db_->search_hybrid(query, group_id, limit);
     set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "hybrid"}});
 }
 
 void HttpServer::handle_get_recent(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    auto group_id = std::stoll(req.matches[1]);
-    auto limit = std::stoi(req.get_param_value("limit", "50"));
+    auto gid_opt = safe_stoll(req.matches[1]);
+    auto limit_opt = safe_stoi(req.get_param_value("limit", "50"));
+    if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto group_id = *gid_opt;
+    auto limit = *limit_opt;
     auto results = db_->get_recent(group_id, limit);
     set_json_response(res, {{"results", search_results_to_json(results)}});
 }
 
 void HttpServer::handle_get_context(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    auto msg_id = std::stoll(req.matches[1]);
-    auto radius = std::stoi(req.get_param_value("radius", "5"));
+    auto mid_opt = safe_stoll(req.matches[1]);
+    auto radius_opt = safe_stoi(req.get_param_value("radius", "5"));
+    if (!mid_opt || !radius_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto msg_id = *mid_opt;
+    auto radius = *radius_opt;
     auto results = db_->query()->get_context(msg_id, radius);
     set_json_response(res, {{"results", search_results_to_json(results)}, {"msg_id", msg_id}});
 }
@@ -323,9 +322,12 @@ void HttpServer::handle_get_context(const httplib::Request& req, httplib::Respon
 // ========== 记忆接口 ==========
 void HttpServer::handle_get_memories(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    auto group_id = std::stoll(req.get_param_value("group_id", "0"));
+    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
+    auto limit_opt = safe_stoi(req.get_param_value("limit", "50"));
+    if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
+    auto group_id = *gid_opt;
     auto level = req.get_param_value("level", "");
-    auto limit = std::stoi(req.get_param_value("limit", "50"));
+    auto limit = *limit_opt;
     auto mems = db_->get_memories(group_id, level, limit);
     protocol::json arr = protocol::json::array();
     for (auto& m : mems) arr.push_back(m);
@@ -377,7 +379,9 @@ void HttpServer::handle_post_memories_merge(const httplib::Request& req, httplib
 
 void HttpServer::handle_delete_memory(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    auto mem_id = std::stoll(req.matches[1]);
+    auto mid_opt = safe_stoll(req.matches[1]);
+    if (!mid_opt) { set_error_response(res, 400, "Invalid memory ID"); return; }
+    auto mem_id = *mid_opt;
     bool ok = false;
     if (db_->summarizer()) {
         ok = db_->summarizer()->delete_memory(mem_id);

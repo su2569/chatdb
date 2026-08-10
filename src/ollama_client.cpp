@@ -1,7 +1,7 @@
 #include "chatdb/ollama_client.hpp"
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 
 // cpp-httplib header-only
 #define CPPHTTPLIB_OPENSSL_SUPPORT

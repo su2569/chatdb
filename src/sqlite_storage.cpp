@@ -5,7 +5,6 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <fmt/format.h>
-#include <fmt/format.h>
 #include <cstring>
 #include <chrono>
 
@@ -221,16 +220,21 @@ void SQLiteStorage::finalize_statements() {
 
 void SQLiteStorage::worker_loop() {
     while (running_) {
-        std::unique_lock<std::mutex> lock(queue_mutex_);
-        bool has_data = queue_cv_.wait_for(lock, std::chrono::milliseconds(flush_interval_ms_), 
-            [this] { return !queue_.empty() || !running_; });
+        try {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            bool has_data = queue_cv_.wait_for(lock, std::chrono::milliseconds(flush_interval_ms_), 
+                [this] { return !queue_.empty() || !running_; });
 
-        if (!running_) break;
+            if (!running_) break;
 
-        if (queue_.size() >= static_cast<size_t>(batch_size_) || 
-            (has_data && !queue_.empty())) {
-            lock.unlock();
-            flush_batch();
+            if (queue_.size() >= static_cast<size_t>(batch_size_) || 
+                (has_data && !queue_.empty())) {
+                lock.unlock();
+                flush_batch();
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("SQLiteStorage worker_loop error: {}", e.what());
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
     // 退出前刷新剩余

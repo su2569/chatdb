@@ -1,5 +1,6 @@
 #include "chatdb/redis_client.hpp"
-#include "hiredis.h"
+#include "chatdb/embedding_provider.hpp"
+#include <hiredis/hiredis.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <cstring>
@@ -28,15 +29,15 @@ bool RedisClient::connect() {
         auto* reply = (redisReply*)redisCommand(impl_->ctx, "AUTH %s", cfg_.password.c_str());
         if (!reply || reply->type == REDIS_REPLY_ERROR) {
             spdlog::error("Redis AUTH failed");
-            freeReplyObject(reply);
+            if (reply) freeReplyObject(reply);
             disconnect();
             return false;
         }
-        freeReplyObject(reply);
+        if (reply) freeReplyObject(reply);
     }
     if (cfg_.db != 0) {
         auto* reply = (redisReply*)redisCommand(impl_->ctx, "SELECT %d", cfg_.db);
-        freeReplyObject(reply);
+        if (reply) freeReplyObject(reply);
     }
     connected_ = true;
     spdlog::info("Redis connected: {}:{}", cfg_.host, cfg_.port);
@@ -66,7 +67,7 @@ bool RedisClient::is_duplicate(int64_t group_id, const std::string& content, int
     if (reply && reply->type == REDIS_REPLY_INTEGER) {
         dup = reply->integer == 1;
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return dup;
 }
 
@@ -76,9 +77,9 @@ void RedisClient::mark_duplicate(int64_t group_id, const std::string& content, i
     std::hash<std::string> hasher;
     auto hash = std::to_string(hasher(content));
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "SADD %s %s", key.c_str(), hash.c_str());
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     reply = (redisReply*)redisCommand(impl_->ctx, "EXPIRE %s %lld", key.c_str(), window_seconds * 2);
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 }
 
 // ========== 向量序列化 ==========
@@ -107,13 +108,17 @@ bool RedisClient::add_vector(int64_t msg_id, int64_t group_id, int64_t qq_id,
                               const std::string& content, int64_t timestamp,
                               const std::vector<float>& embedding) {
     if (!is_connected()) return false;
+    // 算法辅助：存储前归一化，加速后续余弦相似度计算
+    auto norm_embedding = embedding;
+    EmbeddingProvider::normalize(norm_embedding);
+
     auto key = make_vector_key(msg_id);
     auto* reply = (redisReply*)redisCommand(impl_->ctx,
         "HMSET %s msg_id %lld group_id %lld qq_id %lld content %s timestamp %lld embedding %b",
         key.c_str(), msg_id, group_id, qq_id, content.c_str(), timestamp,
-        serialize_vector(embedding).c_str(), embedding.size() * sizeof(float));
+        serialize_vector(norm_embedding).c_str(), norm_embedding.size() * sizeof(float));
     bool ok = reply && reply->type != REDIS_REPLY_ERROR;
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return ok;
 }
 
@@ -127,7 +132,7 @@ std::vector<VectorQueryResult> RedisClient::search_similar(int64_t group_id,
     // 简化：遍历所有 vec:* key 计算余弦相似度
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "KEYS vec:*");
     if (!reply || reply->type != REDIS_REPLY_ARRAY) {
-        freeReplyObject(reply);
+        if (reply) freeReplyObject(reply);
         return results;
     }
 
@@ -138,45 +143,41 @@ std::vector<VectorQueryResult> RedisClient::search_similar(int64_t group_id,
 
         auto* hreply = (redisReply*)redisCommand(impl_->ctx, "HMGET %s msg_id group_id qq_id content timestamp embedding", key.c_str());
         if (!hreply || hreply->type != REDIS_REPLY_ARRAY || hreply->elements < 6) {
-            freeReplyObject(hreply);
+            if (hreply) freeReplyObject(hreply);
             continue;
         }
 
         VectorQueryResult vr;
-        if (hreply->element[0] && hreply->element[0]->type == REDIS_REPLY_STRING)
-            vr.msg_id = std::stoll(hreply->element[0]->str);
-        if (hreply->element[1] && hreply->element[1]->type == REDIS_REPLY_STRING)
-            vr.group_id = std::stoll(hreply->element[1]->str);
-        if (hreply->element[2] && hreply->element[2]->type == REDIS_REPLY_STRING)
-            vr.qq_id = std::stoll(hreply->element[2]->str);
+        if (hreply->element[0] && hreply->element[0]->type == REDIS_REPLY_STRING) {
+            try { vr.msg_id = std::stoll(hreply->element[0]->str); } catch (...) { vr.msg_id = 0; }
+        }
+        if (hreply->element[1] && hreply->element[1]->type == REDIS_REPLY_STRING) {
+            try { vr.group_id = std::stoll(hreply->element[1]->str); } catch (...) { vr.group_id = 0; }
+        }
+        if (hreply->element[2] && hreply->element[2]->type == REDIS_REPLY_STRING) {
+            try { vr.qq_id = std::stoll(hreply->element[2]->str); } catch (...) { vr.qq_id = 0; }
+        }
         if (hreply->element[3] && hreply->element[3]->type == REDIS_REPLY_STRING)
             vr.content = hreply->element[3]->str;
-        if (hreply->element[4] && hreply->element[4]->type == REDIS_REPLY_STRING)
-            vr.timestamp = std::stoll(hreply->element[4]->str);
+        if (hreply->element[4] && hreply->element[4]->type == REDIS_REPLY_STRING) {
+            try { vr.timestamp = std::stoll(hreply->element[4]->str); } catch (...) { vr.timestamp = 0; }
+        }
 
         if (hreply->element[5] && hreply->element[5]->type == REDIS_REPLY_STRING) {
             auto emb = deserialize_vector(std::string(hreply->element[5]->str, hreply->element[5]->len));
-            // 计算余弦相似度
+            // 算法辅助：向量已归一化，只需计算点积即得余弦相似度
             if (emb.size() == query_vec.size() && !emb.empty()) {
-                float dot = 0, norm_a = 0, norm_b = 0;
-                for (size_t j = 0; j < emb.size(); ++j) {
-                    dot += emb[j] * query_vec[j];
-                    norm_a += emb[j] * emb[j];
-                    norm_b += query_vec[j] * query_vec[j];
-                }
-                if (norm_a > 0 && norm_b > 0) {
-                    vr.similarity = dot / (sqrtf(norm_a) * sqrtf(norm_b));
-                }
+                vr.similarity = EmbeddingProvider::cosine_similarity_fast(emb, query_vec);
             }
         }
-        freeReplyObject(hreply);
+        if (hreply) freeReplyObject(hreply);
 
         if (group_id != 0 && vr.group_id != group_id) continue;
         if (vr.similarity >= min_similarity) {
             candidates.push_back(vr);
         }
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 
     // 按相似度排序取 top N
     std::sort(candidates.begin(), candidates.end(),
@@ -189,7 +190,7 @@ bool RedisClient::create_vector_index(int dim) {
     if (!is_connected()) return false;
     // 尝试删除旧索引
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "FT.DROPINDEX msg_vec_idx DD");
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 
     // 创建 RediSearch 索引（如果 Redis 安装了 RediSearch 模块）
     reply = (redisReply*)redisCommand(impl_->ctx,
@@ -199,7 +200,7 @@ bool RedisClient::create_vector_index(int dim) {
     if (!ok && reply) {
         spdlog::warn("FT.CREATE failed (RediSearch module may not be loaded): {}", reply->str ? reply->str : "unknown");
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     index_created_ = ok;
     return ok;
 }
@@ -207,7 +208,7 @@ bool RedisClient::create_vector_index(int dim) {
 bool RedisClient::drop_vector_index() {
     if (!is_connected()) return false;
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "FT.DROPINDEX msg_vec_idx DD");
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     index_created_ = false;
     return true;
 }
@@ -223,7 +224,7 @@ int RedisClient::cleanup_expired_vectors(int retention_days) {
 
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "KEYS vec:*");
     if (!reply || reply->type != REDIS_REPLY_ARRAY) {
-        freeReplyObject(reply);
+        if (reply) freeReplyObject(reply);
         return 0;
     }
 
@@ -233,16 +234,17 @@ int RedisClient::cleanup_expired_vectors(int retention_days) {
         std::string key = reply->element[i]->str;
         auto* ts_reply = (redisReply*)redisCommand(impl_->ctx, "HGET %s timestamp", key.c_str());
         if (ts_reply && ts_reply->type == REDIS_REPLY_STRING) {
-            int64_t ts = std::stoll(ts_reply->str);
+            int64_t ts = 0;
+            try { ts = std::stoll(ts_reply->str); } catch (...) { ts = 0; }
             if (ts < cutoff) {
                 auto* del_reply = (redisReply*)redisCommand(impl_->ctx, "DEL %s", key.c_str());
-                freeReplyObject(del_reply);
+                if (del_reply) freeReplyObject(del_reply);
                 ++deleted;
             }
         }
-        freeReplyObject(ts_reply);
+        if (ts_reply) freeReplyObject(ts_reply);
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return deleted;
 }
 
@@ -250,7 +252,7 @@ int RedisClient::cleanup_expired_vectors(int retention_days) {
 void RedisClient::cache_set(const std::string& key, const std::string& value, int ttl_seconds) {
     if (!is_connected()) return;
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "SETEX %s %d %s", key.c_str(), ttl_seconds, value.c_str());
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 }
 
 std::optional<std::string> RedisClient::cache_get(const std::string& key) {
@@ -260,14 +262,14 @@ std::optional<std::string> RedisClient::cache_get(const std::string& key) {
     if (reply && reply->type == REDIS_REPLY_STRING) {
         result = std::string(reply->str, reply->len);
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return result;
 }
 
 void RedisClient::cache_del(const std::string& key) {
     if (!is_connected()) return;
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "DEL %s", key.c_str());
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 }
 
 // ========== 状态 ==========
@@ -275,7 +277,7 @@ void RedisClient::set_group_state(int64_t group_id, const std::string& field, co
     if (!is_connected()) return;
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "HSET %s %s %s",
         make_state_key(group_id).c_str(), field.c_str(), value.c_str());
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 }
 
 std::optional<std::string> RedisClient::get_group_state(int64_t group_id, const std::string& field) {
@@ -286,7 +288,7 @@ std::optional<std::string> RedisClient::get_group_state(int64_t group_id, const 
     if (reply && reply->type == REDIS_REPLY_STRING) {
         result = std::string(reply->str, reply->len);
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return result;
 }
 
@@ -294,7 +296,7 @@ std::optional<std::string> RedisClient::get_group_state(int64_t group_id, const 
 void RedisClient::queue_push(const std::string& queue_name, const std::string& value) {
     if (!is_connected()) return;
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "LPUSH %s %s", queue_name.c_str(), value.c_str());
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
 }
 
 std::optional<std::string> RedisClient::queue_pop(const std::string& queue_name, int timeout_seconds) {
@@ -306,7 +308,7 @@ std::optional<std::string> RedisClient::queue_pop(const std::string& queue_name,
             result = std::string(reply->element[1]->str, reply->element[1]->len);
         }
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return result;
 }
 
@@ -317,7 +319,7 @@ int RedisClient::queue_length(const std::string& queue_name) {
     if (reply && reply->type == REDIS_REPLY_INTEGER) {
         len = static_cast<int>(reply->integer);
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return len;
 }
 
@@ -330,10 +332,10 @@ int64_t RedisClient::get_memory_usage() const {
         std::string info(reply->str, reply->len);
         auto pos = info.find("used_memory:");
         if (pos != std::string::npos) {
-            mem = std::stoll(info.substr(pos + 12));
+            try { mem = std::stoll(info.substr(pos + 12)); } catch (...) { mem = 0; }
         }
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return mem;
 }
 
@@ -344,7 +346,7 @@ std::string RedisClient::get_info() const {
     if (reply && reply->type == REDIS_REPLY_STRING) {
         info = std::string(reply->str, reply->len);
     }
-    freeReplyObject(reply);
+    if (reply) freeReplyObject(reply);
     return info;
 }
 

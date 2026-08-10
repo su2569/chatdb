@@ -2,7 +2,7 @@
 #include "chatdb/chat_database.hpp"
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketMessage.h>
 
