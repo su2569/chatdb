@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 
 namespace chatdb::protocol {
 

@@ -2,6 +2,7 @@
 #include "chatdb/protocol.hpp"
 #include <string>
 #include <vector>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <functional>

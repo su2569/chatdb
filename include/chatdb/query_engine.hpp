@@ -9,6 +9,7 @@ namespace chatdb {
 
 class SQLiteStorage;
 class RedisClient;
+class EmbeddingProviderManager;
 class OllamaClient;
 struct Message;
 struct VectorQueryResult;
@@ -48,7 +49,7 @@ struct SearchRequest {
 
 class QueryEngine {
 public:
-    QueryEngine(SQLiteStorage* sqlite, RedisClient* redis, OllamaClient* ollama);
+    QueryEngine(SQLiteStorage* sqlite, RedisClient* redis, EmbeddingProviderManager* provider_mgr);
     ~QueryEngine() = default;
 
     // 主搜索接口
@@ -87,7 +88,7 @@ public:
 private:
     std::vector<SearchResult> merge_results(
         const std::vector<Message>& fts_results,
-        const std::vector<VectorQueryResult>& vec_results,
+        const std::vector<SearchResult>& semantic_results,
         float semantic_weight,
         float fulltext_weight,
         int limit);
@@ -96,7 +97,8 @@ private:
 
     SQLiteStorage* sqlite_;
     RedisClient* redis_;
-    OllamaClient* ollama_;
+    EmbeddingProviderManager* provider_mgr_;
+    OllamaClient* ollama_;  // deprecated, kept for compat
 };
 
 } // namespace chatdb

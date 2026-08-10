@@ -28,6 +28,7 @@ struct SseClient {
     std::mutex mtx;
     std::condition_variable cv;
     std::atomic<bool> active{true};
+};
 
 class HttpServer {
 public:
