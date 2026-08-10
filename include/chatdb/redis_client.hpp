@@ -80,6 +80,7 @@ public:
     bool index_exists() const;
 
 private:
+    Config cfg_;
     class Impl;
     std::unique_ptr<Impl> impl_;
 
@@ -89,7 +90,6 @@ private:
     std::string make_dup_key(int64_t group_id);
     std::string make_state_key(int64_t group_id);
 
-    Config cfg_;
     mutable std::mutex mutex_;
     bool connected_ = false;
     bool index_created_ = false;

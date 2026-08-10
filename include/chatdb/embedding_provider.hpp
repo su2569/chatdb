@@ -22,6 +22,23 @@ public:
     virtual int dimension() const = 0;
     virtual int timeout_ms() const = 0;
     virtual void set_timeout(int ms) = 0;
+
+    // 静态工具方法（供 RedisClient 等调用）
+    static void normalize(std::vector<float>& vec) {
+        float norm = 0.0f;
+        for (float v : vec) norm += v * v;
+        norm = std::sqrt(norm);
+        if (norm > 1e-6f) {
+            for (auto& v : vec) v /= norm;
+        }
+    }
+    static float cosine_similarity_fast(const std::vector<float>& a, const std::vector<float>& b) {
+        // 要求 a 已归一化，b 可以是任意向量
+        float dot = 0.0f;
+        size_t n = std::min(a.size(), b.size());
+        for (size_t i = 0; i < n; ++i) dot += a[i] * b[i];
+        return dot;
+    }
 };
 
 // Ollama Provider
