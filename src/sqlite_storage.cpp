@@ -364,7 +364,7 @@ std::vector<Message> SQLiteStorage::query_by_group_time(int64_t group_id, int64_
     return results;
 }
 
-std::vector<Message> SQLiteStorage::fulltext_search(const std::string& keyword, int64_t group_id, int limit) {
+std::vector<Message> SQLiteStorage::fulltext_search(const std::string& keyword, [[maybe_unused]] int64_t group_id, int limit) {
     std::vector<Message> results;
     std::lock_guard<std::mutex> lock(db_mutex_);
 
