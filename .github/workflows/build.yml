@@ -74,10 +74,6 @@ jobs:
 
   build-windows:
     runs-on: windows-2022
-    env:
-      ACTIONS_RUNTIME_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ACTIONS_CACHE_URL: ""
-      VCPKG_BINARY_SOURCES: "clear"
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +81,7 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: 'a1212c93cabf5f8b298f5e5f9c0f15e4e1e5e5e5'
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
 
       - name: Install vcpkg packages
         run: |
@@ -107,6 +104,7 @@ jobs:
         with:
           name: chatdb-windows
           path: build/chatdb.exe
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-linux, build-macos, build-windows]
