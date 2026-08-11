@@ -73,28 +73,32 @@ jobs:
           path: build/chatdb
 
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
         with:
-          vcpkgGitCommitId: 'a1212c93cabf5f8b298f5e5f9c0f15e4e1e5e5e5'
-          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-
-      - name: Install vcpkg packages
-        run: |
-          vcpkg install sqlite3 hiredis --triplet x64-windows
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-hiredis
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-pkgconf
 
       - name: Configure
         run: |
-          cmake -B build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=/ucrt64
 
       - name: Build
         run: cmake --build build --parallel
