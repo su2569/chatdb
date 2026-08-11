@@ -76,12 +76,11 @@ public:
 private:
     std::vector<SearchResult> merge_results(
         const std::vector<SearchResult>& fts_results,
-        const std::vector<VectorQueryResult>& semantic_results,
+        const std::vector<SearchResult>& semantic_results,
         float semantic_weight,
         float fulltext_weight,
         int limit);
 
-    float normalize_score(float score, float min_val, float max_val);
 
     SQLiteStorage* sqlite_;
     RedisClient* redis_;
