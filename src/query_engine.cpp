@@ -2,10 +2,11 @@
 #include "chatdb/sqlite_storage.hpp"
 #include "chatdb/redis_client.hpp"
 #include "chatdb/embedding_provider.hpp"
-#include <optional>
 #include <spdlog/spdlog.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <future>
 #include <unordered_map>
 
 namespace chatdb {
@@ -30,8 +31,8 @@ std::vector<SearchResult> QueryEngine::search(const SearchRequest& req) {
     }
 }
 
-std::vector<SearchResult> QueryEngine::search_fulltext(const std::string& keyword, 
-                                                        int64_t group_id, 
+std::vector<SearchResult> QueryEngine::search_fulltext(const std::string& keyword,
+                                                        int64_t group_id,
                                                         int limit) {
     auto msgs = sqlite_->fulltext_search(keyword, group_id, limit);
 
@@ -108,7 +109,24 @@ std::vector<SearchResult> QueryEngine::search_hybrid(const std::string& query,
     });
 
     auto semantic_results = search_semantic(query, group_id, limit * 2, 0.60f);
-    auto fts_results = fts_future.get();
+    auto fts_msgs = fts_future.get();
+
+    // 将 Message 转换为 SearchResult
+    std::vector<SearchResult> fts_results;
+    fts_results.reserve(fts_msgs.size());
+    for (const auto& m : fts_msgs) {
+        SearchResult r;
+        r.msg_id = m.id;
+        r.group_id = m.group_id;
+        r.qq_id = m.qq_id;
+        r.nickname = m.nickname;
+        r.content = m.content;
+        r.timestamp = m.timestamp;
+        r.relevance_score = 1.0f;
+        r.is_fulltext_match = true;
+        r.is_semantic_match = false;
+        fts_results.push_back(r);
+    }
 
     return merge_results(fts_results, semantic_results, 0.6f, 0.4f, limit);
 }
@@ -134,9 +152,9 @@ std::vector<SearchResult> QueryEngine::get_recent(int64_t group_id, int limit) {
     return results;
 }
 
-std::vector<SearchResult> QueryEngine::get_by_time_range(int64_t group_id, 
-                                                          int64_t start, 
-                                                          int64_t end, 
+std::vector<SearchResult> QueryEngine::get_by_time_range(int64_t group_id,
+                                                          int64_t start,
+                                                          int64_t end,
                                                           int limit) {
     auto msgs = sqlite_->query_by_group_time(group_id, start, end, limit);
 
@@ -158,21 +176,8 @@ std::vector<SearchResult> QueryEngine::get_by_time_range(int64_t group_id,
     return results;
 }
 
-std::optional<SearchResult> QueryEngine::get_message(int64_t msg_id) {
-    auto msg_opt = sqlite_->get_message_by_id(msg_id);
-    if (!msg_opt) return std::nullopt;
-
-    SearchResult r;
-    r.msg_id = msg_opt->id;
-    r.group_id = msg_opt->group_id;
-    r.qq_id = msg_opt->qq_id;
-    r.nickname = msg_opt->nickname;
-    r.content = msg_opt->content;
-    r.timestamp = msg_opt->timestamp;
-    r.relevance_score = 1.0f;
-    r.is_fulltext_match = false;
-    r.is_semantic_match = false;
-    return r;
+std::optional<Message> QueryEngine::get_message(int64_t msg_id) {
+    return sqlite_->get_message_by_id(msg_id);
 }
 
 std::vector<SearchResult> QueryEngine::get_context(int64_t msg_id, int radius) {
@@ -211,7 +216,7 @@ int64_t QueryEngine::count_today(int64_t group_id) {
 }
 
 std::vector<SearchResult> QueryEngine::merge_results(
-    const std::vector<Message>& fts_results,
+    const std::vector<SearchResult>& fts_results,
     const std::vector<SearchResult>& semantic_results,
     float semantic_weight,
     float fulltext_weight,
@@ -220,18 +225,12 @@ std::vector<SearchResult> QueryEngine::merge_results(
     std::unordered_map<int64_t, SearchResult> merged;
 
     // 加入全文结果
-    for (const auto& m : fts_results) {
-        SearchResult r;
-        r.msg_id = m.id;
-        r.group_id = m.group_id;
-        r.qq_id = m.qq_id;
-        r.nickname = m.nickname;
-        r.content = m.content;
-        r.timestamp = m.timestamp;
-        r.relevance_score = fulltext_weight;
-        r.is_fulltext_match = true;
-        r.is_semantic_match = false;
-        merged[m.id] = r;
+    for (const auto& r : fts_results) {
+        SearchResult copy = r;
+        copy.relevance_score = fulltext_weight;
+        copy.is_fulltext_match = true;
+        copy.is_semantic_match = false;
+        merged[r.msg_id] = copy;
     }
 
     // 合并语义结果
@@ -239,8 +238,8 @@ std::vector<SearchResult> QueryEngine::merge_results(
         auto it = merged.find(sr.msg_id);
         if (it != merged.end()) {
             // 同时命中全文和语义
-            it->second.relevance_score = semantic_weight * sr.relevance_score 
-                                         + fulltext_weight * it->second.relevance_score;
+            it->second.relevance_score = semantic_weight * sr.relevance_score
+                + fulltext_weight * it->second.relevance_score;
             it->second.is_semantic_match = true;
         } else {
             merged[sr.msg_id] = sr;
@@ -254,7 +253,7 @@ std::vector<SearchResult> QueryEngine::merge_results(
         results.push_back(std::move(r));
     }
 
-    std::sort(results.begin(), results.end(), 
+    std::sort(results.begin(), results.end(),
               [](const auto& a, const auto& b) { return a.relevance_score > b.relevance_score; });
 
     if (results.size() > static_cast<size_t>(limit)) {
