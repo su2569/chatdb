@@ -1,14 +1,13 @@
 #pragma once
-#include <string>
-#include <vector>
-#include <cstdint>
-#include <memory>
-#include <functional>
-#include <thread>
+#include "chatdb/protocol.hpp"
 #include <atomic>
-#include <queue>
-#include <mutex>
 #include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
+#include <vector>
 
 namespace chatdb {
 
@@ -16,33 +15,11 @@ class SQLiteStorage;
 class RedisClient;
 class OllamaClient;
 
-struct RawMessage {
-    int64_t group_id;
-    int64_t qq_id;
-    std::string nickname;
-    std::string content;
-    int msg_type;
-    int64_t timestamp;
-};
-
-struct ProcessedMessage {
-    int64_t id;
-    int64_t group_id;
-    int64_t qq_id;
-    std::string nickname;
-    std::string content;
-    int msg_type;
-    int64_t timestamp;
-    std::string msg_hash;
-    std::vector<float> embedding;
-    bool is_duplicate;
-};
-
 using MessageCallback = std::function<void(const ProcessedMessage&)>;
 
 class MessageProcessor {
 public:
-    MessageProcessor(SQLiteStorage* sqlite, RedisClient* redis, 
+    MessageProcessor(SQLiteStorage* sqlite, RedisClient* redis,
                      OllamaClient* ollama);
     ~MessageProcessor();
 

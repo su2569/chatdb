@@ -1,14 +1,13 @@
 #pragma once
 #include "chatdb/protocol.hpp"
-#include <string>
-#include <queue>
-#include <condition_variable>
-#include <functional>
-#include <memory>
-#include <thread>
 #include <atomic>
-#include <vector>
+#include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
+#include <vector>
 
 // Forward declaration for cpp-httplib
 namespace httplib {
@@ -28,6 +27,23 @@ struct SseClient {
     std::mutex mtx;
     std::condition_variable cv;
     std::atomic<bool> active{true};
+
+    void push(const std::string& event) {
+        std::lock_guard<std::mutex> lock(mtx);
+        events.push(event);
+        cv.notify_one();
+    }
+
+    bool pop(std::string& event, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (cv.wait_for(lock, timeout, [this] { return !events.empty() || !active.load(); })) {
+            if (!active.load() && events.empty()) return false;
+            event = events.front();
+            events.pop();
+            return true;
+        }
+        return false;
+    }
 };
 
 class HttpServer {
@@ -42,8 +58,8 @@ public:
         bool enable_sse = true;
 
         // 鉴权
-        std::string access_key;       // SM3 哈希后的 key（十六进制）
-        bool require_auth = true;     // 是否强制鉴权
+        std::string access_key; // SM3 哈希后的 key（十六进制）
+        bool require_auth = true; // 是否强制鉴权
     };
 
     HttpServer(const Config& cfg, ChatDatabase* db);

@@ -1,10 +1,10 @@
 #pragma once
-#include <string>
-#include <vector>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace chatdb {
 
@@ -44,14 +44,14 @@ public:
     void mark_duplicate(int64_t group_id, const std::string& content, int64_t window_seconds = 300);
 
     // 向量操作
-    bool add_vector(int64_t msg_id, int64_t group_id, int64_t qq_id, 
+    bool add_vector(int64_t msg_id, int64_t group_id, int64_t qq_id,
                     const std::string& content, int64_t timestamp,
                     const std::vector<float>& embedding);
 
-    std::vector<VectorQueryResult> search_similar(int64_t group_id, 
-                                                   const std::vector<float>& query_embedding,
-                                                   int top_k = 10,
-                                                   float min_similarity = 0.75f);
+    std::vector<VectorQueryResult> search_similar(int64_t group_id,
+                                                     const std::vector<float>& query_embedding,
+                                                     int top_k = 10,
+                                                     float min_similarity = 0.75f);
 
     // 删除过期向量
     int cleanup_expired_vectors(int retention_days);
@@ -69,6 +69,10 @@ public:
     void queue_push(const std::string& queue_name, const std::string& value);
     std::optional<std::string> queue_pop(const std::string& queue_name, int timeout_seconds = 1);
     int queue_length(const std::string& queue_name);
+
+    // 通用 key 操作
+    std::vector<std::string> keys(const std::string& pattern);
+    std::vector<std::string> hgetall(const std::string& key);
 
     // 统计
     int64_t get_memory_usage() const;

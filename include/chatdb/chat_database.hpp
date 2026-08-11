@@ -1,8 +1,9 @@
 #pragma once
 #include "chatdb/config.hpp"
 #include "chatdb/protocol.hpp"
-#include <string>
 #include <memory>
+#include <string>
+#include <vector>
 #include <functional>
 
 namespace chatdb {
@@ -17,31 +18,7 @@ class OneBotV11Client;
 class EmbeddingProviderManager;
 class MemorySummarizer;
 class ProcessGuard;
-struct ActiveChatRequest {
-    int64_t group_id;
-    std::string topic;
-    float urgency;
-};
-
-struct RawMessage {
-    int64_t group_id;
-    int64_t qq_id;
-    std::string nickname;
-    std::string content;
-    int msg_type;
-    int64_t timestamp;
-};
-
 struct SearchRequest;
-struct SearchResult;
-struct ProcessedMessage {
-    int64_t id;
-    int64_t group_id;
-    int64_t qq_id;
-    std::string content;
-    bool is_duplicate;
-    int64_t timestamp;
-};
 
 class ChatDatabase {
 public:

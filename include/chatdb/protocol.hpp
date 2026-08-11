@@ -1,10 +1,55 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
-#include <cstdint>
 #include <nlohmann/json.hpp>
 
-namespace chatdb::protocol {
+namespace chatdb {
+
+// ===== 共享数据结构（从各模块头文件统一提取，避免重复定义） =====
+
+struct RawMessage {
+    int64_t group_id = 0;
+    int64_t qq_id = 0;
+    std::string nickname;
+    std::string content;
+    int msg_type = 1;
+    int64_t timestamp = 0;
+};
+
+struct ProcessedMessage {
+    int64_t id = 0;
+    int64_t group_id = 0;
+    int64_t qq_id = 0;
+    std::string nickname;
+    std::string content;
+    int msg_type = 1;
+    int64_t timestamp = 0;
+    std::string msg_hash;
+    std::vector<float> embedding;
+    bool is_duplicate = false;
+};
+
+struct ActiveChatRequest {
+    int64_t group_id = 0;
+    std::string topic;
+    std::string suggested_content;
+    float urgency = 0.5f; // 0.0~1.0，决定是否真的发送
+};
+
+struct SearchResult {
+    int64_t msg_id = 0;
+    int64_t group_id = 0;
+    int64_t qq_id = 0;
+    std::string nickname;
+    std::string content;
+    int64_t timestamp = 0;
+    float relevance_score = 0.0f; // 综合相关度分数
+    bool is_semantic_match = false;
+    bool is_fulltext_match = false;
+};
+
+namespace protocol {
 
 using json = nlohmann::json;
 
@@ -59,43 +104,43 @@ inline Response parse_response(const std::string& data) {
 }
 
 namespace methods {
-    constexpr const char* MSG_RECEIVE      = "msg.receive";
-    constexpr const char* MSG_BATCH        = "msg.batch";
-    constexpr const char* MSG_RECALL       = "msg.recall";
-    constexpr const char* MSG_GET          = "msg.get";
-    constexpr const char* MSG_CONTEXT      = "msg.context";
-    constexpr const char* SEARCH_FULLTEXT  = "search.fulltext";
-    constexpr const char* SEARCH_SEMANTIC  = "search.semantic";
-    constexpr const char* SEARCH_HYBRID    = "search.hybrid";
-    constexpr const char* SEARCH_TIME      = "search.time";
-    constexpr const char* SEARCH_MARKED    = "search.marked";
-    constexpr const char* SEARCH_REF       = "search.ref";
-    constexpr const char* MEM_GET          = "mem.get";
-    constexpr const char* MEM_LIST         = "mem.list";
-    constexpr const char* MEM_IMPORTANCE   = "mem.set_importance";
-    constexpr const char* MEM_MERGE        = "mem.merge";
-    constexpr const char* MEM_DELETE       = "mem.delete";
-    constexpr const char* MEM_SUMMARIZE    = "mem.summarize";
-    constexpr const char* MEM_ACTIVE_CHAT  = "mem.active_chat";
-    constexpr const char* CFG_GET          = "cfg.get";
-    constexpr const char* CFG_SET          = "cfg.set";
-    constexpr const char* CFG_RELOAD       = "cfg.reload";
-    constexpr const char* PROVIDER_LIST    = "provider.list";
-    constexpr const char* PROVIDER_SWITCH  = "provider.switch";
-    constexpr const char* PROVIDER_STATUS  = "provider.status";
-    constexpr const char* SYS_STATS        = "sys.stats";
-    constexpr const char* SYS_HEALTH       = "sys.health";
-    constexpr const char* SYS_BACKUP       = "sys.backup";
-    constexpr const char* SYS_RESTORE      = "sys.restore";
-    constexpr const char* SYS_VACUUM       = "sys.vacuum";
-    constexpr const char* SYS_CLEANUP      = "sys.cleanup";
+    constexpr const char* MSG_RECEIVE = "msg.receive";
+    constexpr const char* MSG_BATCH = "msg.batch";
+    constexpr const char* MSG_RECALL = "msg.recall";
+    constexpr const char* MSG_GET = "msg.get";
+    constexpr const char* MSG_CONTEXT = "msg.context";
+    constexpr const char* SEARCH_FULLTEXT = "search.fulltext";
+    constexpr const char* SEARCH_SEMANTIC = "search.semantic";
+    constexpr const char* SEARCH_HYBRID = "search.hybrid";
+    constexpr const char* SEARCH_TIME = "search.time";
+    constexpr const char* SEARCH_MARKED = "search.marked";
+    constexpr const char* SEARCH_REF = "search.ref";
+    constexpr const char* MEM_GET = "mem.get";
+    constexpr const char* MEM_LIST = "mem.list";
+    constexpr const char* MEM_IMPORTANCE = "mem.set_importance";
+    constexpr const char* MEM_MERGE = "mem.merge";
+    constexpr const char* MEM_DELETE = "mem.delete";
+    constexpr const char* MEM_SUMMARIZE = "mem.summarize";
+    constexpr const char* MEM_ACTIVE_CHAT = "mem.active_chat";
+    constexpr const char* CFG_GET = "cfg.get";
+    constexpr const char* CFG_SET = "cfg.set";
+    constexpr const char* CFG_RELOAD = "cfg.reload";
+    constexpr const char* PROVIDER_LIST = "provider.list";
+    constexpr const char* PROVIDER_SWITCH = "provider.switch";
+    constexpr const char* PROVIDER_STATUS = "provider.status";
+    constexpr const char* SYS_STATS = "sys.stats";
+    constexpr const char* SYS_HEALTH = "sys.health";
+    constexpr const char* SYS_BACKUP = "sys.backup";
+    constexpr const char* SYS_RESTORE = "sys.restore";
+    constexpr const char* SYS_VACUUM = "sys.vacuum";
+    constexpr const char* SYS_CLEANUP = "sys.cleanup";
 }
 
 namespace events {
-    constexpr const char* MSG_NEW          = "evt.msg_new";
-    constexpr const char* MEM_SUMMARY      = "evt.mem_summary";
-    constexpr const char* MEM_ACTIVE       = "evt.mem_active";
-    constexpr const char* SYS_ALERT        = "evt.sys_alert";
+    constexpr const char* MSG_NEW = "evt.msg_new";
+    constexpr const char* MEM_SUMMARY = "evt.mem_summary";
+    constexpr const char* MEM_ACTIVE = "evt.mem_active";
+    constexpr const char* SYS_ALERT = "evt.sys_alert";
     constexpr const char* PROVIDER_CHANGED = "evt.provider_changed";
 }
 
@@ -144,4 +189,5 @@ inline void to_json(json& j, const EmbeddingProviderConfig& p) {
              {"is_active", p.is_active}};
 }
 
-} // namespace chatdb::protocol
+} // namespace protocol
+} // namespace chatdb
