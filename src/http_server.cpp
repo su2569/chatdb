@@ -2,14 +2,14 @@
 #include "chatdb/chat_database.hpp"
 #include "chatdb/protocol.hpp"
 #include "chatdb/query_engine.hpp"
-#include <spdlog/spdlog.h>
+#include "chatdb/memory_summarizer.hpp"
+#include "chatdb/embedding_provider.hpp"
 #include <fmt/format.h>
 #include <httplib.h>
-#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
-#include <openssl/sha.h>
+#include <spdlog/spdlog.h>
 #include <chrono>
-#include <condition_variable>
+#include <cstring>
 
 namespace chatdb {
 
@@ -40,7 +40,11 @@ static std::optional<int> safe_stoi(const std::string& s) {
     try { return std::stoi(s); } catch (...) { return std::nullopt; }
 }
 
-// ========== SSE 客户端（定义在 http_server.hpp 中）==========
+// ========== 参数获取辅助（httplib get_param_value 第二个参数是 index 而非 default）==========
+static std::string get_param_or_default(const httplib::Request& req, const std::string& key, const std::string& default_val = "") {
+    auto val = req.get_param_value(key);
+    return val.empty() ? default_val : val;
+}
 
 HttpServer::HttpServer(const Config& cfg, ChatDatabase* db) : cfg_(cfg), db_(db) {}
 
@@ -49,7 +53,6 @@ HttpServer::~HttpServer() { stop(); }
 bool HttpServer::start() {
     server_ = std::make_unique<httplib::Server>();
 
-    // CORS
     if (cfg_.enable_cors) {
         server_->set_base_dir(".");
         server_->set_file_extension_and_mimetype_mapping("html", "text/html");
@@ -66,15 +69,13 @@ bool HttpServer::start() {
         }
     });
 
-    // 等待启动
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return running_;
+    return running_.load();
 }
 
 void HttpServer::stop() {
     running_ = false;
 
-    // 关闭所有 SSE 客户端
     {
         std::lock_guard<std::mutex> lock(sse_mutex_);
         for (auto& wp : sse_clients_) {
@@ -111,7 +112,6 @@ bool HttpServer::check_auth(const httplib::Request& req, httplib::Response& res)
         key = auth;
     }
 
-    // SHA1 验证：计算 key 的 SHA1，与存储的哈希值比较
     std::string hashed = sha1_hex(key);
     if (hashed != cfg_.access_key) {
         set_error_response(res, 403, "Invalid access key");
@@ -123,7 +123,6 @@ bool HttpServer::check_auth(const httplib::Request& req, httplib::Response& res)
 void HttpServer::setup_routes() {
     auto prefix = cfg_.api_prefix;
 
-    // CORS preflight
     if (cfg_.enable_cors) {
         server_->Options(prefix + ".*", [](const httplib::Request&, httplib::Response& res) {
             res.set_header("Access-Control-Allow-Origin", "*");
@@ -133,31 +132,26 @@ void HttpServer::setup_routes() {
         });
     }
 
-    // Messages
     server_->Post(prefix + "/messages", [this](const auto& req, auto& res) { handle_post_messages(req, res); });
     server_->Post(prefix + "/messages/batch", [this](const auto& req, auto& res) { handle_post_messages_batch(req, res); });
     server_->Post(prefix + "/messages/recall", [this](const auto& req, auto& res) { handle_post_messages_recall(req, res); });
 
-    // Search
     server_->Get(prefix + "/search", [this](const auto& req, auto& res) { handle_get_search(req, res); });
     server_->Get(prefix + "/search/semantic", [this](const auto& req, auto& res) { handle_get_search_semantic(req, res); });
     server_->Get(prefix + "/search/hybrid", [this](const auto& req, auto& res) { handle_get_search_hybrid(req, res); });
-    server_->Get(prefix + "/recent/(\d+)", [this](const auto& req, auto& res) { handle_get_recent(req, res); });
-    server_->Get(prefix + "/context/(\d+)", [this](const auto& req, auto& res) { handle_get_context(req, res); });
+    server_->Get(prefix + "/recent/(\\d+)", [this](const auto& req, auto& res) { handle_get_recent(req, res); });
+    server_->Get(prefix + "/context/(\\d+)", [this](const auto& req, auto& res) { handle_get_context(req, res); });
 
-    // Memories
     server_->Get(prefix + "/memories", [this](const auto& req, auto& res) { handle_get_memories(req, res); });
     server_->Post(prefix + "/memories/summarize", [this](const auto& req, auto& res) { handle_post_memories_summarize(req, res); });
     server_->Post(prefix + "/memories/importance", [this](const auto& req, auto& res) { handle_post_memories_importance(req, res); });
     server_->Post(prefix + "/memories/merge", [this](const auto& req, auto& res) { handle_post_memories_merge(req, res); });
-    server_->Delete(prefix + "/memories/(\d+)", [this](const auto& req, auto& res) { handle_delete_memory(req, res); });
+    server_->Delete(prefix + "/memories/(\\d+)", [this](const auto& req, auto& res) { handle_delete_memory(req, res); });
 
-    // Providers
     server_->Get(prefix + "/providers", [this](const auto& req, auto& res) { handle_get_providers(req, res); });
     server_->Post(prefix + "/providers/switch", [this](const auto& req, auto& res) { handle_post_providers_switch(req, res); });
     server_->Get(prefix + "/providers/status", [this](const auto& req, auto& res) { handle_get_providers_status(req, res); });
 
-    // System
     server_->Get(prefix + "/stats", [this](const auto& req, auto& res) { handle_get_stats(req, res); });
     server_->Get(prefix + "/health", [this](const auto& req, auto& res) { handle_get_health(req, res); });
     server_->Post(prefix + "/backup", [this](const auto& req, auto& res) { handle_post_backup(req, res); });
@@ -167,19 +161,16 @@ void HttpServer::setup_routes() {
     server_->Get(prefix + "/config", [this](const auto& req, auto& res) { handle_get_config(req, res); });
     server_->Put(prefix + "/config", [this](const auto& req, auto& res) { handle_put_config(req, res); });
 
-    // SSE
     if (cfg_.enable_sse) {
         server_->Get(prefix + "/events", [this](const auto& req, auto& res) { handle_sse_events(req, res); });
     }
 
-    // 404
     server_->set_error_handler([](const auto&, auto& res) {
         res.status = 404;
         res.set_content(R"({"error":"Not Found"})", "application/json");
     });
 }
 
-// ========== 响应工具 ==========
 void HttpServer::set_json_response(httplib::Response& res, const protocol::json& j, int status) {
     res.status = status;
     res.set_content(j.dump(), "application/json");
@@ -211,7 +202,6 @@ protocol::json HttpServer::search_results_to_json(const std::vector<SearchResult
     return arr;
 }
 
-// ========== 消息接口 ==========
 void HttpServer::handle_post_messages(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     try {
@@ -224,7 +214,7 @@ void HttpServer::handle_post_messages(const httplib::Request& req, httplib::Resp
             j.value("msg_type", 1),
             j.value("timestamp", 0)
         );
-        set_json_response(res, {{"status", "received"}, {"msg_id", db_->count_messages()}});
+        set_json_response(res, protocol::json{{"status", "received"}, {"msg_id", db_->count_messages()}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -238,11 +228,11 @@ void HttpServer::handle_post_messages_batch(const httplib::Request& req, httplib
         std::vector<RawMessage> batch;
         for (auto& m : msgs) {
             batch.push_back({m.value("group_id", 0), m.value("qq_id", 0),
-                           m.value("nickname", ""), m.value("content", ""),
-                           m.value("msg_type", 1), m.value("timestamp", 0)});
+                             m.value("nickname", ""), m.value("content", ""),
+                             m.value("msg_type", 1), m.value("timestamp", 0)});
         }
         db_->receive_messages(std::move(batch));
-        set_json_response(res, {{"status", "received"}, {"count", batch.size()}});
+        set_json_response(res, protocol::json{{"status", "received"}, {"count", batch.size()}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -253,85 +243,83 @@ void HttpServer::handle_post_messages_recall(const httplib::Request& req, httpli
     try {
         auto j = protocol::json::parse(req.body);
         db_->handle_recall(j.value("group_id", 0), j.value("msg_id", 0),
-                          j.value("content", ""), j.value("important", false));
-        set_json_response(res, {{"status", "recall_handled"}});
+                           j.value("content", ""), j.value("important", false));
+        set_json_response(res, protocol::json{{"status", "recall_handled"}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
 }
 
-// ========== 搜索接口 ==========
 void HttpServer::handle_get_search(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
-    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(get_param_or_default(req, "group_id", "0"));
+    auto limit_opt = safe_stoi(get_param_or_default(req, "limit", "20"));
     if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto group_id = *gid_opt;
     auto limit = *limit_opt;
     auto results = db_->search_fulltext(query, group_id, limit);
-    set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "fulltext"}});
+    set_json_response(res, protocol::json{{"results", search_results_to_json(results)}, {"type", "fulltext"}});
 }
 
 void HttpServer::handle_get_search_semantic(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
-    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(get_param_or_default(req, "group_id", "0"));
+    auto limit_opt = safe_stoi(get_param_or_default(req, "limit", "20"));
     if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto group_id = *gid_opt;
     auto limit = *limit_opt;
     auto results = db_->search_semantic(query, group_id, limit);
-    set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "semantic"}});
+    set_json_response(res, protocol::json{{"results", search_results_to_json(results)}, {"type", "semantic"}});
 }
 
 void HttpServer::handle_get_search_hybrid(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto query = req.get_param_value("q");
-    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
-    auto limit_opt = safe_stoi(req.get_param_value("limit", "20"));
+    auto gid_opt = safe_stoll(get_param_or_default(req, "group_id", "0"));
+    auto limit_opt = safe_stoi(get_param_or_default(req, "limit", "20"));
     if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto group_id = *gid_opt;
     auto limit = *limit_opt;
     auto results = db_->search_hybrid(query, group_id, limit);
-    set_json_response(res, {{"results", search_results_to_json(results)}, {"type", "hybrid"}});
+    set_json_response(res, protocol::json{{"results", search_results_to_json(results)}, {"type", "hybrid"}});
 }
 
 void HttpServer::handle_get_recent(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto gid_opt = safe_stoll(req.matches[1]);
-    auto limit_opt = safe_stoi(req.get_param_value("limit", "50"));
+    auto limit_opt = safe_stoi(get_param_or_default(req, "limit", "50"));
     if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto group_id = *gid_opt;
     auto limit = *limit_opt;
     auto results = db_->get_recent(group_id, limit);
-    set_json_response(res, {{"results", search_results_to_json(results)}});
+    set_json_response(res, protocol::json{{"results", search_results_to_json(results)}});
 }
 
 void HttpServer::handle_get_context(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
     auto mid_opt = safe_stoll(req.matches[1]);
-    auto radius_opt = safe_stoi(req.get_param_value("radius", "5"));
+    auto radius_opt = safe_stoi(get_param_or_default(req, "radius", "5"));
     if (!mid_opt || !radius_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto msg_id = *mid_opt;
     auto radius = *radius_opt;
     auto results = db_->query()->get_context(msg_id, radius);
-    set_json_response(res, {{"results", search_results_to_json(results)}, {"msg_id", msg_id}});
+    set_json_response(res, protocol::json{{"results", search_results_to_json(results)}, {"msg_id", msg_id}});
 }
 
-// ========== 记忆接口 ==========
 void HttpServer::handle_get_memories(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    auto gid_opt = safe_stoll(req.get_param_value("group_id", "0"));
-    auto limit_opt = safe_stoi(req.get_param_value("limit", "50"));
+    auto gid_opt = safe_stoll(get_param_or_default(req, "group_id", "0"));
+    auto limit_opt = safe_stoi(get_param_or_default(req, "limit", "50"));
     if (!gid_opt || !limit_opt) { set_error_response(res, 400, "Invalid parameters"); return; }
     auto group_id = *gid_opt;
-    auto level = req.get_param_value("level", "");
+    auto level = req.get_param_value("level");
     auto limit = *limit_opt;
     auto mems = db_->get_memories(group_id, level, limit);
     protocol::json arr = protocol::json::array();
     for (auto& m : mems) arr.push_back(m);
-    set_json_response(res, {{"memories", arr}});
+    set_json_response(res, protocol::json{{"memories", arr}});
 }
 
 void HttpServer::handle_post_memories_summarize(const httplib::Request& req, httplib::Response& res) {
@@ -339,7 +327,7 @@ void HttpServer::handle_post_memories_summarize(const httplib::Request& req, htt
     try {
         auto j = protocol::json::parse(req.body);
         auto id = db_->summarize_now(j.value("group_id", 0), j.value("level", "24h"));
-        set_json_response(res, {{"task_id", id}, {"status", "queued"}});
+        set_json_response(res, protocol::json{{"task_id", id}, {"status", "queued"}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -355,7 +343,7 @@ void HttpServer::handle_post_memories_importance(const httplib::Request& req, ht
         if (db_->summarizer()) {
             db_->summarizer()->mark_importance(msg_id, score, reason);
         }
-        set_json_response(res, {{"status", "marked"}});
+        set_json_response(res, protocol::json{{"status", "marked"}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -371,7 +359,7 @@ void HttpServer::handle_post_memories_merge(const httplib::Request& req, httplib
         if (db_->summarizer()) {
             ok = db_->summarizer()->merge_memories(ids, new_summary);
         }
-        set_json_response(res, {{"status", ok ? "merged" : "failed"}});
+        set_json_response(res, protocol::json{{"status", ok ? "merged" : "failed"}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -386,16 +374,16 @@ void HttpServer::handle_delete_memory(const httplib::Request& req, httplib::Resp
     if (db_->summarizer()) {
         ok = db_->summarizer()->delete_memory(mem_id);
     }
-    set_json_response(res, {{"status", ok ? "deleted" : "failed"}, {"mem_id", mem_id}});
+    set_json_response(res, protocol::json{{"status", ok ? "deleted" : "failed"}, {"mem_id", mem_id}});
 }
 
-// ========== Provider 接口 ==========
 void HttpServer::handle_get_providers(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
     auto names = db_->list_providers();
     protocol::json arr = protocol::json::array();
     for (auto& n : names) arr.push_back(n);
-    set_json_response(res, {{"providers", arr}});
+    set_json_response(res, protocol::json{{"providers", arr}});
 }
 
 void HttpServer::handle_post_providers_switch(const httplib::Request& req, httplib::Response& res) {
@@ -404,7 +392,7 @@ void HttpServer::handle_post_providers_switch(const httplib::Request& req, httpl
         auto j = protocol::json::parse(req.body);
         auto name = j.value("name", "ollama");
         bool ok = db_->switch_provider(name);
-        set_json_response(res, {{"switched", ok}, {"provider", name}});
+        set_json_response(res, protocol::json{{"switched", ok}, {"provider", name}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -412,29 +400,31 @@ void HttpServer::handle_post_providers_switch(const httplib::Request& req, httpl
 
 void HttpServer::handle_get_providers_status(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
     auto current = db_->provider_manager() ? db_->provider_manager()->current() : nullptr;
-    set_json_response(res, {
+    set_json_response(res, protocol::json{
         {"current", current ? current->name() : "none"},
         {"available", db_->list_providers()}
     });
 }
 
-// ========== 系统接口 ==========
 void HttpServer::handle_get_stats(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
     auto stats = db_->get_stats();
-    set_json_response(res, {{"stats", stats}});
+    set_json_response(res, protocol::json{{"stats", stats}});
 }
 
 void HttpServer::handle_get_health(const httplib::Request& req, httplib::Response& res) {
-    // Health check 不需要鉴权
-    set_json_response(res, {{"status", "ok"}, {"version", "2.1.0"}, {"timestamp", time(nullptr)}});
+    (void)req;
+    set_json_response(res, protocol::json{{"status", "ok"}, {"version", "2.1.0"}, {"timestamp", time(nullptr)}});
 }
 
 void HttpServer::handle_post_backup(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
     bool ok = db_->backup_index();
-    set_json_response(res, {{"backup", ok ? "success" : "failed"}});
+    set_json_response(res, protocol::json{{"backup", ok ? "success" : "failed"}});
 }
 
 void HttpServer::handle_post_restore(const httplib::Request& req, httplib::Response& res) {
@@ -443,7 +433,7 @@ void HttpServer::handle_post_restore(const httplib::Request& req, httplib::Respo
         auto j = protocol::json::parse(req.body);
         auto name = j.value("name", "");
         bool ok = db_->restore_index(name);
-        set_json_response(res, {{"restore", ok ? "success" : "failed"}, {"name", name}});
+        set_json_response(res, protocol::json{{"restore", ok ? "success" : "failed"}, {"name", name}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -451,8 +441,9 @@ void HttpServer::handle_post_restore(const httplib::Request& req, httplib::Respo
 
 void HttpServer::handle_post_vacuum(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
     db_->vacuum();
-    set_json_response(res, {{"vacuum", "done"}});
+    set_json_response(res, protocol::json{{"vacuum", "done"}});
 }
 
 void HttpServer::handle_post_cleanup(const httplib::Request& req, httplib::Response& res) {
@@ -461,7 +452,7 @@ void HttpServer::handle_post_cleanup(const httplib::Request& req, httplib::Respo
         auto j = protocol::json::parse(req.body);
         int days = j.value("days", 7);
         int deleted = db_->cleanup_old_data(days);
-        set_json_response(res, {{"deleted", deleted}});
+        set_json_response(res, protocol::json{{"deleted", deleted}});
     } catch (...) {
         set_error_response(res, 400, "Invalid JSON");
     }
@@ -469,17 +460,19 @@ void HttpServer::handle_post_cleanup(const httplib::Request& req, httplib::Respo
 
 void HttpServer::handle_get_config(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    set_json_response(res, {{"status", "TODO"}});
+    (void)req;
+    set_json_response(res, protocol::json{{"status", "TODO"}});
 }
 
 void HttpServer::handle_put_config(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
-    set_json_response(res, {{"status", "TODO"}});
+    (void)req;
+    set_json_response(res, protocol::json{{"status", "TODO"}});
 }
 
-// ========== SSE 事件推送 ==========
 void HttpServer::handle_sse_events(const httplib::Request& req, httplib::Response& res) {
     if (!check_auth(req, res)) return;
+    (void)req;
 
     auto client = std::make_shared<SseClient>();
     client->id = fmt::format("sse_{}", std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -487,10 +480,9 @@ void HttpServer::handle_sse_events(const httplib::Request& req, httplib::Respons
 
     {
         std::lock_guard<std::mutex> lock(sse_mutex_);
-        // 清理已失效的客户端
         sse_clients_.erase(
             std::remove_if(sse_clients_.begin(), sse_clients_.end(),
-                [](const std::weak_ptr<SseClient>& wp) { return wp.expired(); }),
+                           [](const std::weak_ptr<SseClient>& wp) { return wp.expired(); }),
             sse_clients_.end());
         sse_clients_.push_back(client);
     }
@@ -500,10 +492,8 @@ void HttpServer::handle_sse_events(const httplib::Request& req, httplib::Respons
     res.set_header("Connection", "keep-alive");
     if (cfg_.enable_cors) res.set_header("Access-Control-Allow-Origin", "*");
 
-    // 发送初始连接事件
     client->push(fmt::format("event: connected\ndata: {{\"client_id\":\"{}\"}}\n\n", client->id));
 
-    // 使用 content provider 保持连接
     res.set_content_provider("text/event-stream",
         [client, this](size_t /*offset*/, httplib::DataSink& sink) {
             std::string event;
@@ -515,12 +505,11 @@ void HttpServer::handle_sse_events(const httplib::Request& req, httplib::Respons
                         break;
                     }
                 }
-                // 发送心跳注释保持连接
                 sink.write(":\n\n", 3);
             }
             sink.done();
             client->active = false;
-            return false;  // 结束 content provider
+            return false;
         }
     );
 }
@@ -529,10 +518,9 @@ void HttpServer::broadcast_event(const std::string& event_name, const protocol::
     std::string payload = fmt::format("event: {}\ndata: {}\n\n", event_name, data.dump());
 
     std::lock_guard<std::mutex> lock(sse_mutex_);
-    // 清理已失效的客户端
     sse_clients_.erase(
         std::remove_if(sse_clients_.begin(), sse_clients_.end(),
-            [](const std::weak_ptr<SseClient>& wp) { return wp.expired(); }),
+                       [](const std::weak_ptr<SseClient>& wp) { return wp.expired(); }),
         sse_clients_.end());
 
     for (auto& wp : sse_clients_) {

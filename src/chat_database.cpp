@@ -11,9 +11,9 @@
 #include "chatdb/process_guard.hpp"
 #include "chatdb/port_detector.hpp"
 #include "chatdb/config.hpp"
-#include <fstream>
 #include <spdlog/spdlog.h>
-#include <fmt/format.h>
+#include <fstream>
+#include <chrono>
 
 namespace chatdb {
 
@@ -136,7 +136,6 @@ bool ChatDatabase::initialize(const DatabaseConfig& cfg) {
     // Provider 切换回调
     provider_mgr_->on_switch([this](const std::string& old_name, const std::string& new_name) {
         spdlog::info("Provider switched from {} to {}, rebuilding index...", old_name, new_name);
-        // 触发索引重建广播
         if (tcp_) {
             tcp_->broadcast_event(protocol::events::PROVIDER_CHANGED, {{"old", old_name}, {"new", new_name}});
         }
@@ -173,9 +172,9 @@ bool ChatDatabase::detect_and_connect_ports(DatabaseConfig& cfg) {
 }
 
 void ChatDatabase::receive_message(int64_t group_id, int64_t qq_id,
-                                    const std::string& nickname,
-                                    const std::string& content,
-                                    int msg_type, int64_t timestamp) {
+                                   const std::string& nickname,
+                                   const std::string& content,
+                                   int msg_type, int64_t timestamp) {
     if (!ready_) return;
     RawMessage msg{group_id, qq_id, nickname, content, msg_type, timestamp};
     processor_->receive_message(std::move(msg));
@@ -226,7 +225,7 @@ int64_t ChatDatabase::count_messages(int64_t group_id) {
 }
 
 protocol::json ChatDatabase::get_stats() {
-    if (!ready_) return {{"error", "Not initialized"}};
+    if (!ready_) return protocol::json{{"error", "Not initialized"}};
     auto total = sqlite_->count_messages();
     auto processed = processor_->processed_count();
     auto dup = processor_->duplicate_count();
@@ -261,7 +260,7 @@ bool ChatDatabase::backup_index() {
 
     try {
         // 1. 获取所有向量 key
-        auto keys = redis_->command<std::vector<std::string>>({"KEYS", "vec:*"});
+        auto keys = redis_->keys("vec:*");
         if (keys.empty()) {
             spdlog::info("No vectors to backup");
             return true;
@@ -270,27 +269,17 @@ bool ChatDatabase::backup_index() {
         // 2. 序列化所有向量数据到 JSON
         protocol::json backup_data = protocol::json::array();
         for (const auto& key : keys) {
-            // redis command removed - using sqlite only
+            auto fields = redis_->hgetall(key);
             protocol::json item;
+            item["key"] = key;
             for (size_t i = 0; i + 1 < fields.size(); i += 2) {
                 item[fields[i]] = fields[i + 1];
             }
             backup_data.push_back(item);
         }
 
-        // 3. 压缩并保存到 SQLite (index_backups 表)
+        // 3. 保存到文件
         std::string json_str = backup_data.dump();
-
-        // 计算 checksum (简化: 用长度+前100字符的hash)
-        size_t checksum = std::hash<std::string>{}(json_str.substr(0, std::min(json_str.size(), size_t(1000))));
-
-        // 插入备份记录
-        // 这里需要 SQLiteStorage 暴露执行原始 SQL 的接口
-        // 简化：直接通过 sqlite3_exec
-        sqlite3* db = nullptr;
-        // 获取底层 db 指针（需要暴露接口或友元）
-        // 由于封装限制，这里改为写入文件备份
-
         std::string filename = fmt::format("index_backup_{}.json", time(nullptr));
         std::ofstream ofs(filename, std::ios::binary);
         if (!ofs) {
@@ -300,7 +289,7 @@ bool ChatDatabase::backup_index() {
         ofs.write(json_str.data(), json_str.size());
         ofs.close();
 
-        spdlog::info("Index backup saved: {} ({} vectors, {} bytes)", 
+        spdlog::info("Index backup saved: {} ({} vectors, {} bytes)",
                      filename, keys.size(), json_str.size());
         return true;
     } catch (const std::exception& e) {
@@ -311,9 +300,8 @@ bool ChatDatabase::backup_index() {
 
 bool ChatDatabase::restore_index(const std::string& name) {
     try {
-        // 查找最新的备份文件
-        // 简化实现：需要用户指定文件名或通过文件系统扫描
         spdlog::info("Index restore: please specify backup file via API");
+        (void)name; // 标记未使用
         return false;
     } catch (const std::exception& e) {
         spdlog::error("Restore failed: {}", e.what());

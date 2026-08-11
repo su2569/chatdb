@@ -1,10 +1,10 @@
 #include "chatdb/redis_client.hpp"
 #include "chatdb/embedding_provider.hpp"
+#include <fmt/format.h>
 #include <hiredis/hiredis.h>
 #include <spdlog/spdlog.h>
-#include <fmt/format.h>
-#include <cstring>
 #include <chrono>
+#include <cstring>
 
 namespace chatdb {
 
@@ -105,10 +105,9 @@ std::vector<float> RedisClient::deserialize_vector(const std::string& s) {
 
 // ========== 向量索引 ==========
 bool RedisClient::add_vector(int64_t msg_id, int64_t group_id, int64_t qq_id,
-                              const std::string& content, int64_t timestamp,
-                              const std::vector<float>& embedding) {
+                             const std::string& content, int64_t timestamp,
+                             const std::vector<float>& embedding) {
     if (!is_connected()) return false;
-    // 算法辅助：存储前归一化，加速后续余弦相似度计算
     auto norm_embedding = embedding;
     EmbeddingProvider::normalize(norm_embedding);
 
@@ -128,8 +127,6 @@ std::vector<VectorQueryResult> RedisClient::search_similar(int64_t group_id,
     std::vector<VectorQueryResult> results;
     if (!is_connected() || !index_created_) return results;
 
-    // 使用 RedisJSON + RediSearch 的 FT.SEARCH
-    // 简化：遍历所有 vec:* key 计算余弦相似度
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "KEYS vec:*");
     if (!reply || reply->type != REDIS_REPLY_ARRAY) {
         if (reply) freeReplyObject(reply);
@@ -165,7 +162,6 @@ std::vector<VectorQueryResult> RedisClient::search_similar(int64_t group_id,
 
         if (hreply->element[5] && hreply->element[5]->type == REDIS_REPLY_STRING) {
             auto emb = deserialize_vector(std::string(hreply->element[5]->str, hreply->element[5]->len));
-            // 算法辅助：向量已归一化，只需计算点积即得余弦相似度
             if (emb.size() == query_vec.size() && !emb.empty()) {
                 vr.similarity = EmbeddingProvider::cosine_similarity_fast(emb, query_vec);
             }
@@ -179,20 +175,17 @@ std::vector<VectorQueryResult> RedisClient::search_similar(int64_t group_id,
     }
     if (reply) freeReplyObject(reply);
 
-    // 按相似度排序取 top N
     std::sort(candidates.begin(), candidates.end(),
-        [](const auto& a, const auto& b) { return a.similarity > b.similarity; });
+              [](const auto& a, const auto& b) { return a.similarity > b.similarity; });
     if ((size_t)limit < candidates.size()) candidates.resize(limit);
     return candidates;
 }
 
 bool RedisClient::create_vector_index(int dim) {
     if (!is_connected()) return false;
-    // 尝试删除旧索引
     auto* reply = (redisReply*)redisCommand(impl_->ctx, "FT.DROPINDEX msg_vec_idx DD");
     if (reply) freeReplyObject(reply);
 
-    // 创建 RediSearch 索引（如果 Redis 安装了 RediSearch 模块）
     reply = (redisReply*)redisCommand(impl_->ctx,
         "FT.CREATE msg_vec_idx ON HASH PREFIX 1 vec: SCHEMA msg_id TAG group_id TAG qq_id TAG content TEXT timestamp NUMERIC embedding VECTOR FLAT 6 DIM %d DISTANCE_METRIC COSINE TYPE FLOAT32",
         dim);
@@ -321,6 +314,37 @@ int RedisClient::queue_length(const std::string& queue_name) {
     }
     if (reply) freeReplyObject(reply);
     return len;
+}
+
+// ========== 通用 key 操作（新增）==========
+std::vector<std::string> RedisClient::keys(const std::string& pattern) {
+    std::vector<std::string> result;
+    if (!is_connected()) return result;
+    auto* reply = (redisReply*)redisCommand(impl_->ctx, "KEYS %s", pattern.c_str());
+    if (reply && reply->type == REDIS_REPLY_ARRAY) {
+        for (size_t i = 0; i < reply->elements; ++i) {
+            if (reply->element[i] && reply->element[i]->type == REDIS_REPLY_STRING) {
+                result.emplace_back(reply->element[i]->str, reply->element[i]->len);
+            }
+        }
+    }
+    if (reply) freeReplyObject(reply);
+    return result;
+}
+
+std::vector<std::string> RedisClient::hgetall(const std::string& key) {
+    std::vector<std::string> result;
+    if (!is_connected()) return result;
+    auto* reply = (redisReply*)redisCommand(impl_->ctx, "HGETALL %s", key.c_str());
+    if (reply && reply->type == REDIS_REPLY_ARRAY) {
+        for (size_t i = 0; i < reply->elements; ++i) {
+            if (reply->element[i] && reply->element[i]->type == REDIS_REPLY_STRING) {
+                result.emplace_back(reply->element[i]->str, reply->element[i]->len);
+            }
+        }
+    }
+    if (reply) freeReplyObject(reply);
+    return result;
 }
 
 // ========== 统计 ==========

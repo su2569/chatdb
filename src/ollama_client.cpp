@@ -1,10 +1,11 @@
 #include "chatdb/ollama_client.hpp"
-#include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
 
 // cpp-httplib header-only
-#define CPPHTTPLIB_OPENSSL_SUPPORT
+// NOTE: CPPHTTPLIB_OPENSSL_SUPPORT is defined via CMake compile definitions
+// Do NOT define it here to avoid redefinition warnings
 #include <httplib.h>
 
 namespace chatdb {
@@ -13,7 +14,7 @@ using json = nlohmann::json;
 
 class OllamaClient::HttpClientImpl {
 public:
-    explicit HttpClientImpl(const std::string& host, int port) 
+    explicit HttpClientImpl(const std::string& host, int port)
         : client_(fmt::format("{}:{}", host, port)) {}
 
     httplib::Client client_;
@@ -61,7 +62,6 @@ std::vector<std::vector<float>> OllamaClient::embed_batch(const std::vector<std:
     std::vector<std::vector<float>> results;
     results.reserve(texts.size());
 
-    // 批量请求
     json req = {
         {"model", cfg_.model},
         {"input", texts}
@@ -69,7 +69,7 @@ std::vector<std::vector<float>> OllamaClient::embed_batch(const std::vector<std:
 
     for (int retry = 0; retry < cfg_.max_retries; ++retry) {
         try {
-            auto res = http_->client_.Post("/api/embed", 
+            auto res = http_->client_.Post("/api/embed",
                 req.dump(), "application/json");
 
             if (res && res->status == 200) {
@@ -100,7 +100,6 @@ std::future<std::vector<float>> OllamaClient::embed_async(const std::string& tex
     auto future = promise.get_future();
 
     if (!running_) {
-        // 同步执行
         try {
             auto result = do_embed(text);
             promise.set_value(std::move(result));
@@ -110,7 +109,6 @@ std::future<std::vector<float>> OllamaClient::embed_async(const std::string& tex
         return future;
     }
 
-    // 入队异步处理
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         task_queue_.push({msg_id, text, std::move(promise)});
@@ -197,7 +195,6 @@ std::vector<int8_t> OllamaClient::quantize_int8(const std::vector<float>& vec) {
     std::vector<int8_t> result;
     result.reserve(vec.size());
     for (float v : vec) {
-        // 映射 [-1, 1] -> [-127, 127]
         int val = static_cast<int>(v * 127.0f);
         if (val > 127) val = 127;
         if (val < -127) val = -127;
@@ -218,7 +215,6 @@ std::vector<float> OllamaClient::dequantize_int8(const std::vector<int8_t>& vec)
 std::vector<float> OllamaClient::reduce_dim(const std::vector<float>& vec, int target_dim) {
     if (vec.size() <= static_cast<size_t>(target_dim)) return vec;
 
-    // 简单平均池化降维
     std::vector<float> result;
     result.reserve(target_dim);
 
