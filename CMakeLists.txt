@@ -145,7 +145,7 @@ endif()
 if(MSVC)
   target_compile_options(chatdb PRIVATE /W4 /WX-)
 else()
-  target_compile_options(chatdb PRIVATE -Wall -Wextra -Wpedantic -O2)
+  target_compile_options(chatdb PRIVATE -Wall -Wextra -Wpedantic -O2 -Wno-dangling-reference)
 endif()
 
 install(TARGETS chatdb DESTINATION bin)
